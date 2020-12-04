@@ -1,0 +1,27 @@
+builds:
+  - main: cmd/main.go
+    binary: changed-files
+    ldflags: -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{ .CommitDate }} -X main.builtBy=goreleaser
+    goos:
+      - windows
+      - darwin
+      - linux
+    goarch:
+      - amd64
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^refactor'
+      - '^tweak'
+      - '^test'
+brews:
+  - tap:
+      owner: zcong1993
+      name: homebrew-tap
+    folder: Formula
+    homepage: https://github.com/zcong1993/changed-files
+    description: 一个让你更方便刷题的工具
+    test: |
+      system "#{bin}/changed-files -v"
