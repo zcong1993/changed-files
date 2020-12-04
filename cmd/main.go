@@ -44,7 +44,7 @@ func findChangedFilesUsingCommand(cwd string, args ...string) []string {
 	return res
 }
 
-func combineOutputs(results ...[]string) []string {
+func uniqueCombineOutputs(results ...[]string) []string {
 	mp := make(map[string]struct{}, 0)
 	for _, r := range results {
 		for _, s := range r {
@@ -74,7 +74,7 @@ func findChangedFiles(cwd string, option *Option) []string {
 			wg.Done()
 		}()
 		wg.Wait()
-		return combineOutputs(res...)
+		return uniqueCombineOutputs(res...)
 	}
 
 	if option.LastCommit {
@@ -105,7 +105,9 @@ func findChangedFiles(cwd string, option *Option) []string {
 		wg.Done()
 	}()
 
-	return combineOutputs(res...)
+	wg.Wait()
+
+	return uniqueCombineOutputs(res...)
 }
 
 func filter(result []string, reg *regexp.Regexp) []string {
@@ -126,6 +128,7 @@ func main() {
 	app.Flag("changedSince", "Get changed since commit.").Short('s').StringVar(&option.ChangedSince)
 	filterReg := app.Flag("filter", "Filter regex.").Short('f').String()
 	command := app.Arg("command", "Command prefix.").String()
+	folder := app.Flag("folder", "If return folder path.").Bool()
 
 	app.Version(buildVersion(version, commit, date, builtBy))
 	app.VersionFlag.Short('v')
@@ -147,6 +150,14 @@ func main() {
 
 	if len(files) == 0 {
 		os.Exit(1)
+	}
+
+	if *folder {
+		folders := make([]string, 0)
+		for _, fp := range files {
+			folders = append(folders, filepath.Dir(fp))
+		}
+		files = uniqueCombineOutputs(folders)
 	}
 
 	fmt.Printf("%s %s", *command, strings.Join(files, " "))
