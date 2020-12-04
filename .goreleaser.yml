@@ -22,6 +22,6 @@ brews:
       name: homebrew-tap
     folder: Formula
     homepage: https://github.com/zcong1993/changed-files
-    description: 一个让你更方便刷题的工具
+    description: go port jest-changed-files
     test: |
       system "#{bin}/changed-files -v"
