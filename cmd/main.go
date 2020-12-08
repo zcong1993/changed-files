@@ -26,7 +26,7 @@ type Option struct {
 	ChangedSince string
 }
 
-func findChangedFilesUsingCommand(cwd string, args ...string) []string {
+func findChangedAndFilter(cwd string, args []string, reg *regexp.Regexp) []string {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = cwd
 	out, err := cmd.Output()
@@ -38,6 +38,9 @@ func findChangedFilesUsingCommand(cwd string, args ...string) []string {
 	res := make([]string, 0)
 	for _, ss := range tmpArr {
 		if ss != "" {
+			if reg != nil && !reg.MatchString(ss) {
+				continue
+			}
 			res = append(res, filepath.Join(cwd, ss))
 		}
 	}
@@ -60,17 +63,17 @@ func uniqueCombineOutputs(results ...[]string) []string {
 	return res
 }
 
-func findChangedFiles(cwd string, option *Option) []string {
+func findChangedFiles(cwd string, option *Option, reg *regexp.Regexp) []string {
 	if option == nil || (!option.WithAncestor && !option.LastCommit && option.ChangedSince == "") {
 		var wg sync.WaitGroup
 		wg.Add(2)
 		res := make([][]string, 2)
 		go func() {
-			res[0] = findChangedFilesUsingCommand(cwd, "diff", "--cached", "--name-only")
+			res[0] = findChangedAndFilter(cwd, []string{"diff", "--cached", "--name-only"}, reg)
 			wg.Done()
 		}()
 		go func() {
-			res[1] = findChangedFilesUsingCommand(cwd, "ls-files", "--other", "--modified", "--exclude-standard")
+			res[1] = findChangedAndFilter(cwd, []string{"ls-files", "--other", "--modified", "--exclude-standard"}, reg)
 			wg.Done()
 		}()
 		wg.Wait()
@@ -78,7 +81,7 @@ func findChangedFiles(cwd string, option *Option) []string {
 	}
 
 	if option.LastCommit {
-		return findChangedFilesUsingCommand(cwd, "show", "--name-only", "--pretty=format:", "HEAD")
+		return findChangedAndFilter(cwd, []string{"show", "--name-only", "--pretty=format:", "HEAD"}, reg)
 	}
 
 	changedSince := option.ChangedSince
@@ -91,33 +94,23 @@ func findChangedFiles(cwd string, option *Option) []string {
 	res := make([][]string, 3)
 
 	go func() {
-		res[0] = findChangedFilesUsingCommand(cwd, "diff", "--name-only", fmt.Sprintf("%s...HEAD", changedSince))
+		res[0] = findChangedAndFilter(cwd, []string{"diff", "--name-only", fmt.Sprintf("%s...HEAD", changedSince)}, reg)
 		wg.Done()
 	}()
 
 	go func() {
-		res[1] = findChangedFilesUsingCommand(cwd, "diff", "--cached", "--name-only")
+		res[1] = findChangedAndFilter(cwd, []string{"diff", "--cached", "--name-only"}, reg)
 		wg.Done()
 	}()
 
 	go func() {
-		res[2] = findChangedFilesUsingCommand(cwd, "ls-files", "--other", "--modified", "--exclude-standard")
+		res[2] = findChangedAndFilter(cwd, []string{"ls-files", "--other", "--modified", "--exclude-standard"}, reg)
 		wg.Done()
 	}()
 
 	wg.Wait()
 
 	return uniqueCombineOutputs(res...)
-}
-
-func filter(result []string, reg *regexp.Regexp) []string {
-	res := make([]string, 0)
-	for _, s := range result {
-		if reg.MatchString(s) {
-			res = append(res, s)
-		}
-	}
-	return res
 }
 
 func main() {
@@ -127,8 +120,8 @@ func main() {
 	app.Flag("withAncestor", "If with ancestor.").Short('w').BoolVar(&option.WithAncestor)
 	app.Flag("changedSince", "Get changed since commit.").Short('s').StringVar(&option.ChangedSince)
 	filterReg := app.Flag("filter", "Filter regex.").Short('f').String()
-	command := app.Arg("command", "Command prefix.").String()
 	folder := app.Flag("folder", "If return folder path.").Bool()
+	command := app.Arg("command", "Command prefix.").String()
 
 	app.Version(buildVersion(version, commit, date, builtBy))
 	app.VersionFlag.Short('v')
@@ -141,12 +134,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	files := findChangedFiles(cwd, option)
-
+	var reg *regexp.Regexp
 	if *filterReg != "" {
-		reg := regexp.MustCompile(*filterReg)
-		files = filter(files, reg)
+		reg = regexp.MustCompile(*filterReg)
 	}
+
+	files := findChangedFiles(cwd, option, reg)
 
 	if len(files) == 0 {
 		os.Exit(1)
