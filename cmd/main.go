@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -8,8 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 
+	"golang.org/x/sync/errgroup"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
@@ -26,16 +27,18 @@ type Option struct {
 	ChangedSince string
 }
 
-func findChangedAndFilter(cwd string, args []string, reg *regexp.Regexp) []string {
+func findChangedAndFilter(cwd string, args []string, reg *regexp.Regexp) (res []string, err error) {
+	var bf bytes.Buffer
 	cmd := exec.Command("git", args...)
 	cmd.Dir = cwd
+	cmd.Stderr = &bf
 	out, err := cmd.Output()
 	if err != nil {
-		log.Fatal(err)
+		err = fmt.Errorf("run cmd error args %s, error: %s", strings.Join(args, " "), bf.String())
+		return
 	}
 	s := string(out)
 	tmpArr := strings.Split(s, "\n")
-	res := make([]string, 0)
 	for _, ss := range tmpArr {
 		if ss != "" {
 			if reg != nil && !reg.MatchString(ss) {
@@ -44,7 +47,7 @@ func findChangedAndFilter(cwd string, args []string, reg *regexp.Regexp) []strin
 			res = append(res, filepath.Join(cwd, ss))
 		}
 	}
-	return res
+	return
 }
 
 func uniqueCombineOutputs(results ...[]string) []string {
@@ -63,21 +66,34 @@ func uniqueCombineOutputs(results ...[]string) []string {
 	return res
 }
 
-func findChangedFiles(cwd string, option *Option, reg *regexp.Regexp) []string {
+func findChangedFiles(cwd string, option *Option, reg *regexp.Regexp) ([]string, error) {
 	if option == nil || (!option.WithAncestor && !option.LastCommit && option.ChangedSince == "") {
-		var wg sync.WaitGroup
-		wg.Add(2)
+		eg := new(errgroup.Group)
 		res := make([][]string, 2)
-		go func() {
-			res[0] = findChangedAndFilter(cwd, []string{"diff", "--cached", "--name-only"}, reg)
-			wg.Done()
-		}()
-		go func() {
-			res[1] = findChangedAndFilter(cwd, []string{"ls-files", "--other", "--modified", "--exclude-standard"}, reg)
-			wg.Done()
-		}()
-		wg.Wait()
-		return uniqueCombineOutputs(res...)
+
+		eg.Go(func() error {
+			r, err := findChangedAndFilter(cwd, []string{"diff", "--cached", "--name-only"}, reg)
+			if err != nil {
+				return err
+			}
+			res[0] = r
+			return nil
+		})
+
+		eg.Go(func() error {
+			r, err := findChangedAndFilter(cwd, []string{"ls-files", "--other", "--modified", "--exclude-standard"}, reg)
+			if err != nil {
+				return err
+			}
+			res[1] = r
+			return nil
+		})
+
+		err := eg.Wait()
+		if err != nil {
+			return nil, err
+		}
+		return uniqueCombineOutputs(res...), nil
 	}
 
 	if option.LastCommit {
@@ -89,28 +105,41 @@ func findChangedFiles(cwd string, option *Option, reg *regexp.Regexp) []string {
 		changedSince = "HEAD^"
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(3)
+	eg := new(errgroup.Group)
 	res := make([][]string, 3)
 
-	go func() {
-		res[0] = findChangedAndFilter(cwd, []string{"diff", "--name-only", fmt.Sprintf("%s...HEAD", changedSince)}, reg)
-		wg.Done()
-	}()
+	eg.Go(func() error {
+		r, err := findChangedAndFilter(cwd, []string{"diff", "--name-only", fmt.Sprintf("%s...HEAD", changedSince)}, reg)
+		if err != nil {
+			return err
+		}
+		res[0] = r
+		return nil
+	})
 
-	go func() {
-		res[1] = findChangedAndFilter(cwd, []string{"diff", "--cached", "--name-only"}, reg)
-		wg.Done()
-	}()
+	eg.Go(func() error {
+		r, err := findChangedAndFilter(cwd, []string{"diff", "--cached", "--name-only"}, reg)
+		if err != nil {
+			return err
+		}
+		res[1] = r
+		return nil
+	})
 
-	go func() {
-		res[2] = findChangedAndFilter(cwd, []string{"ls-files", "--other", "--modified", "--exclude-standard"}, reg)
-		wg.Done()
-	}()
+	eg.Go(func() error {
+		r, err := findChangedAndFilter(cwd, []string{"ls-files", "--other", "--modified", "--exclude-standard"}, reg)
+		if err != nil {
+			return err
+		}
+		res[2] = r
+		return nil
+	})
 
-	wg.Wait()
-
-	return uniqueCombineOutputs(res...)
+	err := eg.Wait()
+	if err != nil {
+		return nil, err
+	}
+	return uniqueCombineOutputs(res...), nil
 }
 
 func main() {
@@ -139,7 +168,12 @@ func main() {
 		reg = regexp.MustCompile(*filterReg)
 	}
 
-	files := findChangedFiles(cwd, option, reg)
+	files, err := findChangedFiles(cwd, option, reg)
+
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 
 	if len(files) == 0 {
 		os.Exit(1)
